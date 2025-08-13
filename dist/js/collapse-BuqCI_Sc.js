@@ -1,0 +1,3 @@
+function l(n,t,i,o){for(var s=n.length,e=i+-1;++e<s;)if(t(n[e],e,n))return e;return-1}function a(n){return n!==n}function r(n,t,i){for(var o=i-1,s=n.length;++o<s;)if(n[o]===t)return o;return-1}function u(n,t,i){return t===t?r(n,t,i):l(n,a,i)}function c(n,t){var i=n==null?0:n.length;return!!i&&u(n,t,0)>-1}const h=n=>({[n.componentCls]:{[`${n.antCls}-motion-collapse-legacy`]:{overflow:"hidden","&-active":{transition:`height ${n.motionDurationMid} ${n.motionEaseInOut},
+        opacity ${n.motionDurationMid} ${n.motionEaseInOut} !important`}},[`${n.antCls}-motion-collapse`]:{overflow:"hidden",transition:`height ${n.motionDurationMid} ${n.motionEaseInOut},
+        opacity ${n.motionDurationMid} ${n.motionEaseInOut} !important`}}});export{c as a,l as b,h as g};

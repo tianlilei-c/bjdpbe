@@ -1,0 +1,1 @@
+const t="演示",e="北疆电厂供热供汽实时监控系统",n={title:"项目",about:"关于",document:"文档",antdv:"Ant Design Vue 版本","naive-ui":"Naive UI 版本","element-plus":"Element Plus 版本"},s={title:t,antd:e,vben:n};export{e as antd,s as default,t as title,n as vben};
