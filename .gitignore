@@ -1,0 +1,93 @@
+
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# build outputs
+/.next/
+/out/
+/build
+
+# testing
+/coverage
+
+# debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (本地配置，敏感信息)
+/.env*
+!.env.example
+
+# vercel
+.vercel
+.vercelignore
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# OS、工具
+.DS_Store
+Thumbs.db
+
+# ================================
+#  后端（Python / Django / MongoEngine）
+# ================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# virtualenvs
+venv/
+env/
+ENV/
+.venv/
+.ENV/
+
+# Django-specific
+*.log
+*.pot
+*.pyc
+db.sqlite3
+media/
+staticfiles/
+static/
+
+# local settings
+local_settings.py
+.cursor
+# test / coverage
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache/
+nosetests.xml
+coverage.xml
+*,cover
+
+# MongoDB lock files 
+/mongod.lock
+
+# ================================
+#  编辑器 & IDE
+# ================================
+# VSCode
+.vscode/
+
+# JetBrains IntelliJ / PyCharm
+.idea/
+*.iml
+
+# other editor temp files
+*~
+*.swp
