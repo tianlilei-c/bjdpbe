@@ -95,7 +95,7 @@ TOOLS: Dict[str, Dict[str, Any]] = {
         "schema": {
             "type": "object",
             "properties": {
-                "chart_type": {"type": "string", "enum": ["line", "bar", "scatter", "area", "pie"], "description": "图表类型，如'line'"},
+                "chart_type": {"type": "string", "enum": ["line", "bar", "scatter", "area"], "description": "图表类型，如'line'"},
                 "data": {"type": "array", "description": "数据数组，每个元素是一个包含字段值的数据对象"},
                 "encodings": {
                     "type": "object",

@@ -371,137 +371,56 @@ def gen_chart_option(chart_type: str, data: List[Dict[str, Any]], encodings: Dic
 
     # 生成系列配置
     series = []
-    
-    if chart_type == "pie":
-        # 饼图特殊处理：需要将数据转换为饼图格式
-        pie_data = []
-        for field in y_keys:
-            field_name = get_field_display_name(field)
-            # 计算该字段的平均值或最新值作为饼图数据
-            values = series_data[field]
-            if values:
-                # 使用平均值，如果都是0则使用最新值
-                avg_value = sum(values) / len(values) if values else 0
-                if avg_value == 0 and values:
-                    avg_value = values[-1]  # 使用最新值
-                if avg_value > 0:  # 只显示大于0的数据
-                    pie_data.append({
-                        "name": field_name,
-                        "value": round(avg_value, 2)
-                    })
-        
-        if not pie_data:
-            raise ToolError("饼图数据为空，请确保至少有一个字段有有效数据")
-            
+    for field in y_keys:
+        # 根据字段类型确定系列名称
+        field_name = get_field_display_name(field)
         series.append({
-            "name": title,
-            "type": "pie",
-            "radius": "50%",
-            "data": pie_data,
-            "emphasis": {
-                "itemStyle": {
-                    "shadowBlur": 10,
-                    "shadowOffsetX": 0,
-                    "shadowColor": "rgba(0, 0, 0, 0.5)"
-                }
-            }
+            "name": field_name,
+            "type": "line" if chart_type == "line" else "bar",
+            "data": series_data[field],
+            "smooth": True if chart_type == "line" else False,
+            "symbol": "none" if len(data) > 100 else "circle",
+            "lineWidth": 2 if chart_type == "line" else None
         })
-    else:
-        # 其他图表类型的处理
-        for field in y_keys:
-            # 根据字段类型确定系列名称
-            field_name = get_field_display_name(field)
-            series_config = {
-                "name": field_name,
-                "data": series_data[field],
-            }
-            
-            if chart_type == "line":
-                series_config.update({
-                    "type": "line",
-                    "smooth": True,
-                    "symbol": "none" if len(data) > 100 else "circle",
-                    "lineWidth": 2
-                })
-            elif chart_type == "bar":
-                series_config.update({
-                    "type": "bar"
-                })
-            elif chart_type == "scatter":
-                series_config.update({
-                    "type": "scatter",
-                    "symbolSize": 6
-                })
-            elif chart_type == "area":
-                series_config.update({
-                    "type": "line",
-                    "smooth": True,
-                    "areaStyle": {},
-                    "symbol": "none" if len(data) > 100 else "circle",
-                    "lineWidth": 2
-                })
-            
-            series.append(series_config)
 
     # 生成ECharts配置
-    if chart_type == "pie":
-        # 饼图配置
-        option = {
-            "title": {
-                "text": title,
-                "left": "center",
-                "textStyle": {"fontSize": 16}
-            },
-            "tooltip": {
-                "trigger": "item",
-                "formatter": "{a} <br/>{b}: {c} ({d}%)"
-            },
-            "legend": {
-                "orient": "vertical",
-                "left": "left",
-                "data": [get_field_display_name(field) for field in y_keys]
-            },
-            "series": series
-        }
-    else:
-        # 其他图表配置
-        option = {
-            "title": {
-                "text": title,
-                "left": "center",
-                "textStyle": {"fontSize": 16}
-            },
-            "tooltip": {
-                "trigger": "axis",
-                "axisPointer": {"type": "cross"}
-            },
-            "legend": {
-                "type": "scroll",
-                "top": 30,
-                "data": [get_field_display_name(field) for field in y_keys]
-            },
-            "grid": {
-                "left": "3%",
-                "right": "4%",
-                "bottom": "3%",
-                "containLabel": True
-            },
-            "xAxis": {
-                "type": "category",
-                "boundaryGap": False,
-                "data": x_axis_data,
-                "axisLabel": {"rotate": 45 if len(x_axis_data) > 20 else 0}
-            },
-            "yAxis": {
-                "type": "value",
-                "name": y_unit,
-                "axisLabel": {"formatter": f"{{value}} {y_unit}"}
-            },
-            "series": series
-        }
+    option = {
+        "title": {
+            "text": title,
+            "left": "center",
+            "textStyle": {"fontSize": 16}
+        },
+        "tooltip": {
+            "trigger": "axis",
+            "axisPointer": {"type": "cross"}
+        },
+        "legend": {
+            "type": "scroll",
+            "top": 30,
+            "data": [get_field_display_name(field) for field in y_keys]
+        },
+        "grid": {
+            "left": "3%",
+            "right": "4%",
+            "bottom": "3%",
+            "containLabel": True
+        },
+        "xAxis": {
+            "type": "category",
+            "boundaryGap": False,
+            "data": x_axis_data,
+            "axisLabel": {"rotate": 45 if len(x_axis_data) > 20 else 0}
+        },
+        "yAxis": {
+            "type": "value",
+            "name": y_unit,
+            "axisLabel": {"formatter": f"{{value}} {y_unit}"}
+        },
+        "series": series
+    }
     
-    # 如果数据点太多，添加数据缩放（饼图不需要）
-    if chart_type != "pie" and len(data) > 50:
+    # 如果数据点太多，添加数据缩放
+    if len(data) > 50:
         option["dataZoom"] = [
             {"type": "inside", "start": 0, "end": 100},
             {"type": "slider", "start": 0, "end": 100, "height": 20}
