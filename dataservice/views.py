@@ -802,6 +802,90 @@ class SensorDataViewSet(viewsets.ViewSet):
             }, status=status.HTTP_200_OK)
 
     @action(detail=False, methods=['get'])
+    def hourly_data(self, request):
+        """
+        获取最近12小时的整点数据，用于机组功率和五抽压力图表
+        """
+        try:
+            from datetime import datetime, timedelta
+            
+            # 计算12小时前的时间
+            end_time = datetime.now()
+            start_time = end_time - timedelta(hours=12)
+            
+            # 查询最近12小时的数据
+            queryset = SensorData.objects(
+                timestamp__gte=start_time,
+                timestamp__lte=end_time
+            ).order_by('timestamp')
+            
+            # 按小时分组，取每小时的整点数据（最接近整点的数据）
+            hourly_data = {}
+            
+            for data in queryset:
+                # 将时间向下取整到小时
+                hour_key = data.timestamp.replace(minute=0, second=0, microsecond=0)
+                
+                # 如果这个小时还没有数据，或者当前数据更接近整点，则更新
+                if hour_key not in hourly_data:
+                    hourly_data[hour_key] = data
+                else:
+                    # 计算与整点的时间差
+                    current_diff = abs((data.timestamp - hour_key).total_seconds())
+                    existing_diff = abs((hourly_data[hour_key].timestamp - hour_key).total_seconds())
+                    
+                    if current_diff < existing_diff:
+                        hourly_data[hour_key] = data
+            
+            # 按时间排序并生成12小时的数据
+            sorted_hours = sorted(hourly_data.keys())
+            
+            # 确保有12个数据点，如果不足则用最新数据填充
+            result_data = []
+            for i in range(12):
+                target_hour = end_time.replace(minute=0, second=0, microsecond=0) - timedelta(hours=11-i)
+                
+                # 查找最接近的数据
+                closest_data = None
+                min_diff = float('inf')
+                
+                for hour, data in hourly_data.items():
+                    diff = abs((hour - target_hour).total_seconds())
+                    if diff < min_diff:
+                        min_diff = diff
+                        closest_data = data
+                
+                if closest_data:
+                    result_data.append(closest_data)
+                else:
+                    # 如果没有数据，创建一个空的数据对象
+                    empty_data = SensorData(
+                        timestamp=target_hour,
+                        LDC_1=0, LDC_2=0, LDC_3=0, LDC_4=0,
+                        S5_01=0, S5_02=0, S5_0301=0, S5_0302=0, S5_0401=0, S5_0402=0
+                    )
+                    result_data.append(empty_data)
+            
+            # 序列化数据
+            serializer = SensorDataSerializer(result_data, many=True)
+            
+            return Response({
+                "code": 0,
+                "message": "获取12小时数据成功",
+                "data": {
+                    "results": serializer.data,
+                    "hours": [data.timestamp.strftime('%H:%M') for data in result_data]
+                }
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response({
+                "code": 1,
+                "message": f"获取12小时数据失败: {str(e)}",
+                "data": None
+            }, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'])
     def download(self, request):
         """
         下载传感器数据为CSV文件

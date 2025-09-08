@@ -1,6 +1,8 @@
 # apps/aiservice/agent.py
 # Tracing edition: show every step of the agent-tool loop to the client when debug=True
 import json
+import os
+import datetime as dt
 from typing import Any, Dict, List, Optional
 from django.conf import settings
 import requests
@@ -34,7 +36,7 @@ B) 在所有工具完成后，输出严格 JSON：{"final": {...}}。不得包�
 
 时间查询建议（均以北京时间解释）：
 - 默认查询最近24小时
-- 用户口述“X月Y日”且未指明年份时，优先按当前年解释
+- 用户口述"X月Y日"且未指明年份时，优先按当前年解释
 - 避免在 pipeline 中自行写时间匹配；一律通过 time_range
 - 如果查询无结果，先查询实际数据时间范围并给出合适建议
 - 高频数据（10秒采集）会自动按分钟级采样，减少数据量
@@ -44,6 +46,89 @@ B) 在所有工具完成后，输出严格 JSON：{"final": {...}}。不得包�
 - {"final": {"type": "table", "columns": [...], "rows": [...], "explain": "..."}}
 - {"final": {"type": "text", "content": "..."}}
 """
+
+# 全局日志记录器
+class ConversationLogger:
+    def __init__(self, session_id: str = None):
+        self.session_id = session_id or dt.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        self.log_dir = getattr(settings, 'AI_CONVERSATION_LOG_DIR', '/tmp/ai_conversations')
+        os.makedirs(self.log_dir, exist_ok=True)
+        self.log_file = os.path.join(self.log_dir, f"conversation_{self.session_id}.txt")
+        self.start_time = dt.datetime.now()
+        
+    def log(self, stage: str, data: Any, level: str = "INFO"):
+        """记录对话日志到文件和控制台"""
+        timestamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        
+        # 格式化数据
+        if isinstance(data, dict):
+            formatted_data = json.dumps(data, ensure_ascii=False, indent=2, default=str)
+        else:
+            formatted_data = str(data)
+        
+        log_entry = f"\n{'='*80}\n"
+        log_entry += f"[{timestamp}] {level} - {stage}\n"
+        log_entry += f"{'='*80}\n"
+        log_entry += f"{formatted_data}\n"
+        log_entry += f"{'='*80}\n"
+        
+        # 写入文件
+        try:
+            with open(self.log_file, 'a', encoding='utf-8') as f:
+                f.write(log_entry)
+        except Exception as e:
+            print(f"Failed to write to log file: {e}")
+        
+        # 输出到控制台
+        print(log_entry)
+        
+    def log_request(self, url: str, headers: dict, payload: dict, timeout: int):
+        """记录API请求详情"""
+        request_data = {
+            "url": url,
+            "timeout": timeout,
+            "headers": headers,
+            "payload": payload,
+            "payload_size": len(str(payload))
+        }
+        self.log("API_REQUEST", request_data)
+        
+    def log_response(self, status_code: int, headers: dict, response_text: str, response_json: dict = None):
+        """记录API响应详情"""
+        response_data = {
+            "status_code": status_code,
+            "headers": headers,
+            "response_size": len(response_text),
+            "response_text": response_text,
+            "response_json": response_json
+        }
+        self.log("API_RESPONSE", response_data)
+        
+    def log_tool_call(self, tool_name: str, args: dict, result: dict):
+        """记录工具调用"""
+        tool_data = {
+            "tool_name": tool_name,
+            "args": args,
+            "result": result
+        }
+        self.log("TOOL_CALL", tool_data)
+        
+    def log_message(self, role: str, content: str, tool_calls: list = None):
+        """记录消息"""
+        message_data = {
+            "role": role,
+            "content": content,
+            "tool_calls": tool_calls
+        }
+        self.log("MESSAGE", message_data)
+        
+    def log_final_result(self, result: dict):
+        """记录最终结果"""
+        self.log("FINAL_RESULT", result, "SUCCESS")
+        
+    def get_log_file_path(self):
+        """获取日志文件路径"""
+        return self.log_file
 
 TOOLS: Dict[str, Dict[str, Any]] = {
     "describe_schema": {
@@ -133,6 +218,7 @@ def call_deepseek(
     force_tool: Optional[str] = None,
     json_only: bool = True,
     trace: Optional[List[Dict[str, Any]]] = None,
+    logger: Optional[ConversationLogger] = None,
 ) -> Dict[str, Any]:
     """OpenAI 兼容调用；支持首轮强制工具、严格 JSON、写入 trace。"""
     print("=== Call DeepSeek ===")
@@ -157,6 +243,10 @@ def call_deepseek(
     # 获取超时配置
     timeout_seconds = getattr(settings, "DEEPSEEK_TIMEOUT", 120)
     api_url = getattr(settings, "DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
+    
+    # 记录完整的请求信息
+    if logger:
+        logger.log_request(api_url, headers, payload, timeout_seconds)
     
     # 详细的请求日志
     request_info = {
@@ -202,6 +292,17 @@ def call_deepseek(
         print(f"Status code: {resp.status_code}")
         print(f"Response size: {len(resp.text)} chars")
         print(f"Response headers: {dict(resp.headers)}")
+        print(f"Response text: {resp.text}")
+        
+        # 记录完整的响应信息
+        if logger:
+            response_json = None
+            if resp.status_code == 200:
+                try:
+                    response_json = resp.json()
+                except:
+                    pass
+            logger.log_response(resp.status_code, dict(resp.headers), resp.text, response_json)
         
         if trace is not None:
             trace.append({
@@ -265,11 +366,15 @@ def call_deepseek(
             })
         return {"error": error_msg}
 
-def _exec_tool(name: str, args: Dict[str, Any], trace: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+def _exec_tool(name: str, args: Dict[str, Any], trace: Optional[List[Dict[str, Any]]] = None, logger: Optional[ConversationLogger] = None) -> Dict[str, Any]:
     """执行工具并写入精简 trace。"""
     try:
         if trace is not None:
             trace.append({"stage": "tool_call", "name": name, "args": _redact_args(args)})
+
+        # 记录工具调用
+        if logger:
+            logger.log_tool_call(name, args, {})
 
         # 移除时间格式转换 - 让tools.py直接处理datetime对象
         # MongoDB查询需要使用datetime对象而不是字符串
@@ -284,6 +389,10 @@ def _exec_tool(name: str, args: Dict[str, Any], trace: Optional[List[Dict[str, A
             result = gen_chart_option(**args)
         else:
             result = {"ok": False, "error": f"Unknown tool {name}"}
+
+        # 记录工具结果
+        if logger:
+            logger.log_tool_call(name, args, result)
 
         if trace is not None:
             trace.append({
@@ -331,31 +440,49 @@ def _summarize_result(result: Dict[str, Any]) -> Dict[str, Any]:
             summary["data_sample_keys"] = list(sample.keys())[:6]
     return summary
 
-def run_agent(user_query: str, *, max_iterations: int = 6, debug: bool = True) -> Dict[str, Any]:
+def run_agent(user_query: str, *, max_iterations: int = 6, debug: bool = True, session_id: str = None) -> Dict[str, Any]:
     """
     主执行循环：首轮强制 describe_schema；全程追踪 trace；必要时降级。
     """
+    # 创建日志记录器
+    logger = ConversationLogger(session_id)
+    
     trace: List[Dict[str, Any]] = []
     messages: List[Dict[str, Any]] = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_query},
     ]
     trace.append({"stage": "start", "query": user_query})
+    
+    # 记录会话开始
+    logger.log("SESSION_START", {
+        "user_query": user_query,
+        "session_id": logger.session_id,
+        "max_iterations": max_iterations,
+        "debug": debug
+    })
+    
+    # 记录初始消息
+    logger.log_message("system", SYSTEM_PROMPT)
+    logger.log_message("user", user_query)
 
     # 第1轮：强制 describe_schema（避免模型只回"让我看看…"的文本）
-    resp = call_deepseek(messages, TOOLS, force_tool="describe_schema", json_only=True, trace=trace)
+    resp = call_deepseek(messages, TOOLS, force_tool="describe_schema", json_only=True, trace=trace, logger=logger)
     if "error" in resp:
         result = {"final": {"type": "text", "content": f"API错误: {resp['error']}"}}
         # 即使API失败，也返回trace信息以便调试
-        return _with_debug(result, trace, debug=True)  # 强制返回debug信息
+        return _with_debug(result, trace, debug=True, logger=logger)  # 强制返回debug信息
 
     if "choices" not in resp or not resp["choices"]:
         result = {"final": {"type": "text", "content": "API返回格式异常"}}
-        return _with_debug(result, trace, debug)
+        return _with_debug(result, trace, debug, logger)
 
     first_msg = resp["choices"][0]["message"]
     messages.append(first_msg)
     trace.append({"stage": "model_msg", "has_tool_calls": "tool_calls" in first_msg})
+    
+    # 记录模型响应
+    logger.log_message("assistant", first_msg.get("content", ""), first_msg.get("tool_calls"))
 
     # 执行首轮工具（如果有）
     if "tool_calls" in first_msg:
@@ -365,7 +492,7 @@ def run_agent(user_query: str, *, max_iterations: int = 6, debug: bool = True) -
                 args = json.loads(tc["function"].get("arguments", "{}"))
             except json.JSONDecodeError:
                 args = {}
-            result = _exec_tool(name, args, trace)
+            result = _exec_tool(name, args, trace, logger)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc["id"],
@@ -387,18 +514,21 @@ def run_agent(user_query: str, *, max_iterations: int = 6, debug: bool = True) -
     iteration = 1
     while iteration < max_iterations:
         iteration += 1
-        resp = call_deepseek(messages, TOOLS, json_only=True, trace=trace)
+        resp = call_deepseek(messages, TOOLS, json_only=True, trace=trace, logger=logger)
         if "error" in resp:
             result = {"final": {"type": "text", "content": f"API错误: {resp['error']}"}}
             # 即使API失败，也返回trace信息以便调试
-            return _with_debug(result, trace, debug=True)  # 强制返回debug信息
+            return _with_debug(result, trace, debug=True, logger=logger)  # 强制返回debug信息
         if "choices" not in resp or not resp["choices"]:
             result = {"final": {"type": "text", "content": "API返回格式异常"}}
-            return _with_debug(result, trace, debug)
+            return _with_debug(result, trace, debug, logger)
 
         msg = resp["choices"][0]["message"]
         messages.append(msg)
         trace.append({"stage": "model_msg", "has_tool_calls": "tool_calls" in msg})
+        
+        # 记录模型响应
+        logger.log_message("assistant", msg.get("content", ""), msg.get("tool_calls"))
 
         if "tool_calls" in msg:
             for tc in msg["tool_calls"]:
@@ -407,7 +537,7 @@ def run_agent(user_query: str, *, max_iterations: int = 6, debug: bool = True) -
                     args = json.loads(tc["function"].get("arguments", "{}"))
                 except json.JSONDecodeError:
                     args = {}
-                result = _exec_tool(name, args, trace)
+                result = _exec_tool(name, args, trace, logger)
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
@@ -417,10 +547,10 @@ def run_agent(user_query: str, *, max_iterations: int = 6, debug: bool = True) -
             continue  # 继续下一轮，让模型基于工具结果产生 final
 
         # 没有 tool_calls：尝试直接要最终 JSON
-        final_try = call_deepseek(messages, TOOLS, json_only=False, trace=trace)
+        final_try = call_deepseek(messages, TOOLS, json_only=False, trace=trace, logger=logger)
         if "error" in final_try:
             result = {"final": {"type": "text", "content": f"最终API错误: {final_try['error']}"}}
-            return _with_debug(result, trace, debug=True)  # 强制返回debug信息
+            return _with_debug(result, trace, debug=True, logger=logger)  # 强制返回debug信息
         if "choices" in final_try and final_try["choices"]:
             final_text = final_try["choices"][0]["message"].get("content", "").strip()
 
@@ -447,7 +577,8 @@ def run_agent(user_query: str, *, max_iterations: int = 6, debug: bool = True) -
                     
                     result = json.loads(cleaned_text)
                     if "final" in result:
-                        return _with_debug(result, trace, debug)
+                        logger.log_final_result(result)
+                        return _with_debug(result, trace, debug, logger)
                 except Exception as e:
                     trace.append({"stage": "json_parse_error", "error": str(e), "text": final_text[:200]})
 
@@ -462,13 +593,16 @@ def run_agent(user_query: str, *, max_iterations: int = 6, debug: bool = True) -
     # 多轮仍未成功：降级
     fallback = run_simple_query(user_query)
     trace.append({"stage": "fallback", "reason": "max_iterations_reached"})
-    return _with_debug(fallback, trace, debug)
+    return _with_debug(fallback, trace, debug, logger)
 
-def _with_debug(result: Dict[str, Any], trace: List[Dict[str, Any]], debug: bool) -> Dict[str, Any]:
+def _with_debug(result: Dict[str, Any], trace: List[Dict[str, Any]], debug: bool, logger: ConversationLogger = None) -> Dict[str, Any]:
     """把 trace 装入返回体（仅 debug=True 时）。"""
     if debug:
         result = dict(result)
         result["debug"] = {"trace": trace}
+        if logger:
+            result["debug"]["log_file"] = logger.get_log_file_path()
+            result["debug"]["session_id"] = logger.session_id
     return result
 
 def run_simple_query(user_query: str) -> Dict[str, Any]:
@@ -502,3 +636,80 @@ def run_simple_query(user_query: str) -> Dict[str, Any]:
         return {"final": {"type": "text", "content": "降级：未查询到数据。请缩短时间范围或检查数据采集状态。"}}
     except Exception as e:
         return {"final": {"type": "text", "content": f"降级查询失败：{e}"}}
+
+def get_conversation_logs(session_id: str = None) -> Dict[str, Any]:
+    """获取对话日志信息"""
+    log_dir = getattr(settings, 'AI_CONVERSATION_LOG_DIR', '/tmp/ai_conversations')
+    
+    if session_id:
+        log_file = os.path.join(log_dir, f"conversation_{session_id}.txt")
+        if os.path.exists(log_file):
+            return {
+                "session_id": session_id,
+                "log_file": log_file,
+                "exists": True,
+                "size": os.path.getsize(log_file)
+            }
+        else:
+            return {
+                "session_id": session_id,
+                "log_file": log_file,
+                "exists": False
+            }
+    else:
+        # 返回所有日志文件
+        if not os.path.exists(log_dir):
+            return {"logs": []}
+        
+        logs = []
+        for filename in os.listdir(log_dir):
+            if filename.startswith("conversation_") and filename.endswith(".txt"):
+                filepath = os.path.join(log_dir, filename)
+                logs.append({
+                    "session_id": filename.replace("conversation_", "").replace(".txt", ""),
+                    "log_file": filepath,
+                    "size": os.path.getsize(filepath),
+                    "modified": dt.datetime.fromtimestamp(os.path.getmtime(filepath)).isoformat()
+                })
+        
+        # 按修改时间排序，最新的在前
+        logs.sort(key=lambda x: x["modified"], reverse=True)
+        return {"logs": logs}
+
+def read_conversation_log(session_id: str) -> str:
+    """读取指定会话的完整日志"""
+    log_dir = getattr(settings, 'AI_CONVERSATION_LOG_DIR', '/tmp/ai_conversations')
+    log_file = os.path.join(log_dir, f"conversation_{session_id}.txt")
+    
+    if os.path.exists(log_file):
+        with open(log_file, 'r', encoding='utf-8') as f:
+            return f.read()
+    else:
+        return f"日志文件不存在: {log_file}"
+
+def cleanup_old_logs(days: int = 7) -> Dict[str, Any]:
+    """清理指定天数前的旧日志文件"""
+    log_dir = getattr(settings, 'AI_CONVERSATION_LOG_DIR', '/tmp/ai_conversations')
+    
+    if not os.path.exists(log_dir):
+        return {"cleaned": 0, "message": "日志目录不存在"}
+    
+    cutoff_time = dt.datetime.now() - dt.timedelta(days=days)
+    cleaned_count = 0
+    
+    for filename in os.listdir(log_dir):
+        if filename.startswith("conversation_") and filename.endswith(".txt"):
+            filepath = os.path.join(log_dir, filename)
+            file_time = dt.datetime.fromtimestamp(os.path.getmtime(filepath))
+            
+            if file_time < cutoff_time:
+                try:
+                    os.remove(filepath)
+                    cleaned_count += 1
+                except Exception as e:
+                    print(f"删除文件失败 {filepath}: {e}")
+    
+    return {
+        "cleaned": cleaned_count,
+        "message": f"清理了 {cleaned_count} 个 {days} 天前的日志文件"
+    }
