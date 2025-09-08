@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import SensorData, ManualPlan, DailyManualData
+from .models import SensorData, ManualPlan, DailyManualData, WeatherRecord, HeatPrediction
 
 class SensorDataSerializer(serializers.Serializer):
     """
@@ -238,6 +238,109 @@ class DailyManualDataSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         return DailyManualData.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        for k, v in validated_data.items():
+            setattr(instance, k, v)
+        instance.save()
+        return instance
+
+
+class WeatherRecordSerializer(serializers.Serializer):
+    id = serializers.CharField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True)
+    district_id = serializers.CharField()
+    city_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    data_source = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    data_date = serializers.DateTimeField(format="%Y-%m-%d")
+
+    today_text_day = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    today_text_night = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    today_wd_day = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    today_wc_day = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    today_wd_night = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    today_wc_night = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    today_low = serializers.IntegerField(required=False, allow_null=True)
+    today_high = serializers.IntegerField(required=False, allow_null=True)
+
+    tomorrow_text_day = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    tomorrow_text_night = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    tomorrow_wd_day = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    tomorrow_wc_day = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    tomorrow_wd_night = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    tomorrow_wc_night = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    tomorrow_low = serializers.IntegerField(required=False, allow_null=True)
+    tomorrow_high = serializers.IntegerField(required=False, allow_null=True)
+
+    raw_response = serializers.DictField(required=False, allow_null=True)
+
+    def to_representation(self, instance):
+        if instance is None:
+            return None
+        return {
+            'id': str(instance.id),
+            'created_at': instance.created_at.isoformat() if instance.created_at else None,
+            'updated_at': instance.updated_at.isoformat() if instance.updated_at else None,
+            'district_id': instance.district_id,
+            'city_name': getattr(instance, 'city_name', None),
+            'data_source': getattr(instance, 'data_source', 'baidu'),
+            'data_date': instance.data_date.strftime('%Y-%m-%d') if instance.data_date else None,
+            'today_text_day': getattr(instance, 'today_text_day', None),
+            'today_text_night': getattr(instance, 'today_text_night', None),
+            'today_wd_day': getattr(instance, 'today_wd_day', None),
+            'today_wc_day': getattr(instance, 'today_wc_day', None),
+            'today_wd_night': getattr(instance, 'today_wd_night', None),
+            'today_wc_night': getattr(instance, 'today_wc_night', None),
+            'today_low': getattr(instance, 'today_low', None),
+            'today_high': getattr(instance, 'today_high', None),
+            'tomorrow_text_day': getattr(instance, 'tomorrow_text_day', None),
+            'tomorrow_text_night': getattr(instance, 'tomorrow_text_night', None),
+            'tomorrow_wd_day': getattr(instance, 'tomorrow_wd_day', None),
+            'tomorrow_wc_day': getattr(instance, 'tomorrow_wc_day', None),
+            'tomorrow_wd_night': getattr(instance, 'tomorrow_wd_night', None),
+            'tomorrow_wc_night': getattr(instance, 'tomorrow_wc_night', None),
+            'tomorrow_low': getattr(instance, 'tomorrow_low', None),
+            'tomorrow_high': getattr(instance, 'tomorrow_high', None),
+            'raw_response': getattr(instance, 'raw_response', None),
+        }
+
+    def create(self, validated_data):
+        return WeatherRecord.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        for k, v in validated_data.items():
+            setattr(instance, k, v)
+        instance.save()
+        return instance
+
+
+class HeatPredictionSerializer(serializers.Serializer):
+    id = serializers.CharField(read_only=True)
+    created_at = serializers.DateTimeField(read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True)
+    predict_date = serializers.DateTimeField(format="%Y-%m-%d")
+    district_id = serializers.CharField()
+    min_temp_c = serializers.FloatField()
+    max_temp_c = serializers.FloatField()
+    predicted_heat_gj = serializers.FloatField()
+
+    def to_representation(self, instance):
+        if instance is None:
+            return None
+        return {
+            'id': str(instance.id),
+            'created_at': instance.created_at.isoformat() if instance.created_at else None,
+            'updated_at': instance.updated_at.isoformat() if instance.updated_at else None,
+            'predict_date': instance.predict_date.strftime('%Y-%m-%d') if instance.predict_date else None,
+            'district_id': instance.district_id,
+            'min_temp_c': instance.min_temp_c,
+            'max_temp_c': instance.max_temp_c,
+            'predicted_heat_gj': instance.predicted_heat_gj,
+        }
+
+    def create(self, validated_data):
+        return HeatPrediction.objects.create(**validated_data)
 
     def update(self, instance, validated_data):
         for k, v in validated_data.items():

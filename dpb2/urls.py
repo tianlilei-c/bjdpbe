@@ -22,6 +22,7 @@ from django.conf import settings
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/', include('dataservice.urls')),
+    path('api/ai/', include('aiservice.urls')),
     # 常见静态目录（可选保留）
     re_path(r'^assets/(?P<path>.*)$', serve, {'document_root': settings.BASE_DIR / 'dist' / 'assets'}),
     # 常见根静态文件（可选）

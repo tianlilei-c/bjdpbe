@@ -1,5 +1,5 @@
 from django.db import models
-from mongoengine import Document, DateTimeField, FloatField, StringField, IntField, BooleanField
+from mongoengine import Document, DateTimeField, FloatField, StringField, IntField, BooleanField, DictField
 import datetime
 
 # Create your models here.
@@ -203,6 +203,93 @@ class DailyManualData(Document):
             {'fields': ['date'], 'unique': True, 'name': 'uniq_date'}
         ],
         'ordering': ['-date']
+    }
+
+    def save(self, *args, **kwargs):
+        self.updated_at = datetime.datetime.now()
+        return super().save(*args, **kwargs)
+
+
+class WeatherRecord(Document):
+    """
+    天气记录（来自百度天气），既供页面展示也供模型使用。
+    采集频率：建议每60分钟一次；若仅用于“明日预报”，可3小时一次；特殊需要按需拉取。
+    唯一键：district_id + data_date(天) + data_source(可选)
+    """
+    created_at = DateTimeField(default=datetime.datetime.now, verbose_name="创建时间")
+    updated_at = DateTimeField(default=datetime.datetime.now, verbose_name="更新时间")
+
+    # 区域及来源
+    district_id = StringField(required=True, max_length=20, verbose_name="行政区ID")
+    city_name = StringField(max_length=100, verbose_name="城市名")
+    data_source = StringField(default="baidu", max_length=50, verbose_name="来源")
+
+    # 记录对应的自然日（用于幂等）：通常取 forecasts[0].date 或当前日期
+    data_date = DateTimeField(required=True, verbose_name="自然日00:00:00")
+
+    # 今日/明日关键信息快照（便于前端快速渲染）
+    today_text_day = StringField()
+    today_text_night = StringField()
+    today_wd_day = StringField()
+    today_wc_day = StringField()
+    today_wd_night = StringField()
+    today_wc_night = StringField()
+    today_low = IntField()
+    today_high = IntField()
+
+    tomorrow_text_day = StringField()
+    tomorrow_text_night = StringField()
+    tomorrow_wd_day = StringField()
+    tomorrow_wc_day = StringField()
+    tomorrow_wd_night = StringField()
+    tomorrow_wc_night = StringField()
+    tomorrow_low = IntField()
+    tomorrow_high = IntField()
+
+    # 原始响应（可用于模型训练/回溯）
+    raw_response = DictField()
+
+    meta = {
+        'collection': 'weather_records',
+        'indexes': [
+            # 自动清理180天之前的数据（可按需调整）
+            {'fields': ['created_at'], 'expireAfterSeconds': 15552000, 'name': 'ttl_created_180d'},
+            {'fields': ['district_id', 'data_date'], 'unique': True, 'name': 'uniq_district_date'},
+            {'fields': ['-created_at'], 'name': 'created_desc'},
+        ],
+        'ordering': ['-created_at']
+    }
+
+    def save(self, *args, **kwargs):
+        self.updated_at = datetime.datetime.now()
+        return super().save(*args, **kwargs)
+
+
+class HeatPrediction(Document):
+    """
+    预测结果独立存表：便于前端直接读取 & 历史回溯。
+    唯一：predict_date + district_id（默认全局）
+    """
+    created_at = DateTimeField(default=datetime.datetime.now)
+    updated_at = DateTimeField(default=datetime.datetime.now)
+
+    predict_date = DateTimeField(required=True, verbose_name="预测日期(天)")
+    district_id = StringField(default="120116")
+
+    # 输入（关键：天气）
+    min_temp_c = FloatField()
+    max_temp_c = FloatField()
+
+    # 输出
+    predicted_heat_gj = FloatField()
+
+    meta = {
+        'collection': 'heat_predictions',
+        'indexes': [
+            {'fields': ['district_id', 'predict_date'], 'unique': True, 'name': 'uniq_district_date'},
+            {'fields': ['-created_at'], 'name': 'created_desc'},
+        ],
+        'ordering': ['-created_at']
     }
 
     def save(self, *args, **kwargs):

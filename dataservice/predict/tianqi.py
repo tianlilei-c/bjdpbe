@@ -1,27 +1,30 @@
-# encoding:utf-8
+"""
+保留示例脚本，但建议改用 management command：
+python manage.py fetch_weather --continuous --interval 3600
+或通过 /api/weather/fetch_once 触发一次。
+"""
+
+import os
 import requests
 
-# 服务地址
-host = "https://api.map.baidu.com"
-# 接口地址
-uri = "/weather/v1/"
-ak = "QbcyAz5VAPXxHYGOtHBwuE7y8pFjCPnK"
+host = os.getenv('BAIDU_WEATHER_HOST', 'https://api.map.baidu.com')
+uri = os.getenv('BAIDU_WEATHER_URI', '/weather/v1/')
+ak = os.getenv('BAIDU_WEATHER_AK', '')
+district_id = os.getenv('BAIDU_WEATHER_DISTRICT_ID', '120116')
 
-params = {
-    "district_id": "120116",  # 滨海新区
-    "data_type": "all",       # 返回全部类型数据
-    "ak": ak,
-}
-
-response = requests.get(url=host + uri, params=params)
-if response.ok:
-    data = response.json()
-    if data.get("status") == 0:
-        today = data["result"]["forecasts"][0]  # 只取第一天
-        print(f"{today['date']} {today['week']}：白天{today['text_day']}，"
-              f"夜间{today['text_night']}，气温 {today['low']}~{today['high']}°C，"
-              f"白天{today['wd_day']} {today['wc_day']}，夜间{today['wd_night']} {today['wc_night']}")
-    else:
-        print("API 返回错误：", data)
+if not ak:
+    print('请设置环境变量 BAIDU_WEATHER_AK')
 else:
-    print("请求失败：", response.status_code)
+    params = {"district_id": district_id, "data_type": "all", "ak": ak}
+    response = requests.get(url=host + uri, params=params, timeout=10)
+    if response.ok:
+        data = response.json()
+        if data.get("status") == 0:
+            today = (data.get("result") or {}).get("forecasts", [{}])[0]
+            print(f"{today.get('date')} {today.get('week', '')}：白天{today.get('text_day')}，"
+                  f"夜间{today.get('text_night')}，气温 {today.get('low')}~{today.get('high')}°C，"
+                  f"白天{today.get('wd_day')} {today.get('wc_day')}，夜间{today.get('wd_night')} {today.get('wc_night')}")
+        else:
+            print("API 返回错误：", data)
+    else:
+        print("请求失败：", response.status_code)

@@ -11,9 +11,14 @@ import jwt
 import hashlib
 from mongoengine.errors import DoesNotExist, NotUniqueError
 
-from .models import SensorData, User, ManualPlan, DailyManualData
-from .serializers import SensorDataSerializer, ManualPlanSerializer, DailyManualDataSerializer
+from .models import SensorData, User, ManualPlan, DailyManualData, WeatherRecord, HeatPrediction
+from .serializers import SensorDataSerializer, ManualPlanSerializer, DailyManualDataSerializer, WeatherRecordSerializer, HeatPredictionSerializer
 from django.conf import settings
+import requests
+try:
+    from .predict_service import predict_heat_gj
+except Exception:
+    predict_heat_gj = None  # 可在禁用预测或未安装依赖时优雅降级
 
 # JWT相关常量
 JWT_SECRET = getattr(settings, 'JWT_SECRET', 'your-secret-key-for-jwt')
@@ -1121,3 +1126,165 @@ class DailyManualDataViewSet(viewsets.ViewSet):
             return Response({"code": 0, "message": "deleted", "data": None}, status=status.HTTP_200_OK)
         except DoesNotExist:
             return Response({"code": 1, "message": "not found", "data": None}, status=status.HTTP_404_NOT_FOUND)
+
+
+class WeatherViewSet(viewsets.ViewSet):
+    """天气数据：提供最新与按日查询；并支持触发一次抓取。"""
+
+    @action(detail=False, methods=['get'])
+    def latest(self, request):
+        try:
+            rec = WeatherRecord.objects.order_by('-created_at').first()
+            if not rec:
+                return Response({"code": 1, "message": "no weather data", "data": None}, status=status.HTTP_200_OK)
+            return Response({"code": 0, "message": "ok", "data": WeatherRecordSerializer(rec).data}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"code": 1, "message": str(e), "data": None}, status=status.HTTP_200_OK)
+
+
+class PredictViewSet(viewsets.ViewSet):
+    """供热预测：仅替换天气，其他特征用内置默认值。"""
+
+    @action(detail=False, methods=['post'])
+    def daily(self, request):
+        """
+        请求体：{ min_temp_c: number, max_temp_c: number, date?: 'YYYY-MM-DD' }
+        返回：预测日供热量（GJ），并写入独立表。
+        """
+        try:
+            min_temp = float(request.data.get('min_temp_c'))
+            max_temp = float(request.data.get('max_temp_c'))
+        except Exception:
+            return Response({"code": 1, "message": "min_temp_c/max_temp_c 必须为数字", "data": None}, status=status.HTTP_200_OK)
+
+        date_str = request.data.get('date')
+        if date_str:
+            try:
+                predict_date = datetime.strptime(date_str, '%Y-%m-%d')
+            except Exception:
+                return Response({"code": 1, "message": "date 格式应为 YYYY-MM-DD", "data": None}, status=status.HTTP_200_OK)
+        else:
+            predict_date = datetime.strptime(datetime.now().strftime('%Y-%m-%d'), '%Y-%m-%d')
+
+        # 开关：未启用或无依赖 -> 返回占位结果，不报错
+        if not getattr(settings, 'PREDICT_ENABLED', False) or predict_heat_gj is None:
+            y_hat = None
+        else:
+            try:
+                y_hat = predict_heat_gj(min_temp, max_temp)
+            except Exception as e:
+                return Response({"code": 1, "message": f"预测失败: {e}", "data": None}, status=status.HTTP_200_OK)
+
+        # 保存预测结果（幂等：按日期覆盖）
+        try:
+            district_id = getattr(settings, 'BAIDU_WEATHER_DISTRICT_ID', '120116')
+            rec = HeatPrediction.objects(district_id=district_id, predict_date=predict_date).first()
+            if rec:
+                rec.min_temp_c = min_temp
+                rec.max_temp_c = max_temp
+                rec.predicted_heat_gj = float(y_hat) if y_hat is not None else None
+                rec.save()
+            else:
+                rec = HeatPrediction(
+                    district_id=district_id,
+                    predict_date=predict_date,
+                    min_temp_c=min_temp,
+                    max_temp_c=max_temp,
+                    predicted_heat_gj=float(y_hat) if y_hat is not None else None,
+                )
+                rec.save()
+            # 返回占位提示
+            if y_hat is None:
+                payload = HeatPredictionSerializer(rec).data
+                payload['note'] = '预测功能未启用或依赖未安装'
+                return Response({"code": 0, "message": "ok", "data": payload}, status=status.HTTP_200_OK)
+            else:
+                return Response({"code": 0, "message": "ok", "data": HeatPredictionSerializer(rec).data}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"code": 1, "message": f"保存失败: {e}", "data": None}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['get'])
+    def by_date(self, request):
+        date_str = request.query_params.get('date')  # YYYY-MM-DD
+        if not date_str:
+            return Response({"code": 1, "message": "missing date", "data": None}, status=status.HTTP_200_OK)
+        try:
+            dt = datetime.strptime(date_str, '%Y-%m-%d')
+            rec = WeatherRecord.objects(data_date=dt).first()
+            if not rec:
+                return Response({"code": 1, "message": "not found", "data": None}, status=status.HTTP_200_OK)
+            return Response({"code": 0, "message": "ok", "data": WeatherRecordSerializer(rec).data}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"code": 1, "message": str(e), "data": None}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'])
+    def fetch_once(self, request):
+        """立即从百度天气抓取一次，并保存。返回保存的记录。"""
+        try:
+            ak = getattr(settings, 'BAIDU_WEATHER_AK', '')
+            host = getattr(settings, 'BAIDU_WEATHER_HOST', 'https://api.map.baidu.com')
+            uri = getattr(settings, 'BAIDU_WEATHER_URI', '/weather/v1/')
+            district_id = request.data.get('district_id') or getattr(settings, 'BAIDU_WEATHER_DISTRICT_ID', '120116')
+            if not ak:
+                return Response({"code": 1, "message": "BAIDU_WEATHER_AK 未配置", "data": None}, status=status.HTTP_200_OK)
+
+            params = {"district_id": district_id, "data_type": "all", "ak": ak}
+            resp = requests.get(url=host + uri, params=params, timeout=10)
+            if not resp.ok:
+                return Response({"code": 1, "message": f"HTTP {resp.status_code}", "data": None}, status=status.HTTP_200_OK)
+            data = resp.json()
+            if data.get('status') != 0:
+                return Response({"code": 1, "message": f"API error: {data}", "data": None}, status=status.HTTP_200_OK)
+
+            result = data.get('result') or {}
+            forecasts = result.get('forecasts') or []
+            city = (result.get('location') or {}).get('city', '')
+
+            today = forecasts[0] if len(forecasts) >= 1 else {}
+            tomorrow = forecasts[1] if len(forecasts) >= 2 else {}
+
+            # data_date 取今天日期 00:00:00（本地时区）
+            data_date = datetime.strptime(today.get('date', datetime.now().strftime('%Y-%m-%d')), '%Y-%m-%d')
+
+            # 幂等写入：district_id + data_date 唯一
+            existing = WeatherRecord.objects(district_id=district_id, data_date=data_date).first()
+            if existing:
+                rec = existing
+            else:
+                rec = WeatherRecord(district_id=district_id, data_date=data_date)
+
+            rec.city_name = city
+            rec.data_source = 'baidu'
+            rec.today_text_day = today.get('text_day')
+            rec.today_text_night = today.get('text_night')
+            rec.today_wd_day = today.get('wd_day')
+            rec.today_wc_day = today.get('wc_day')
+            rec.today_wd_night = today.get('wd_night')
+            rec.today_wc_night = today.get('wc_night')
+            rec.today_low = safe_int(today.get('low'))
+            rec.today_high = safe_int(today.get('high'))
+
+            rec.tomorrow_text_day = tomorrow.get('text_day')
+            rec.tomorrow_text_night = tomorrow.get('text_night')
+            rec.tomorrow_wd_day = tomorrow.get('wd_day')
+            rec.tomorrow_wc_day = tomorrow.get('wc_day')
+            rec.tomorrow_wd_night = tomorrow.get('wd_night')
+            rec.tomorrow_wc_night = tomorrow.get('wc_night')
+            rec.tomorrow_low = safe_int(tomorrow.get('low'))
+            rec.tomorrow_high = safe_int(tomorrow.get('high'))
+
+            rec.raw_response = data
+            rec.save()
+            return Response({"code": 0, "message": "ok", "data": WeatherRecordSerializer(rec).data}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({"code": 1, "message": str(e), "data": None}, status=status.HTTP_200_OK)
+
+
+def safe_int(v):
+    try:
+        return int(v) if v is not None else None
+    except Exception:
+        try:
+            return int(float(v))
+        except Exception:
+            return None

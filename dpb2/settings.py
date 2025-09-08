@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/3.2/ref/settings/
 """
 
 from pathlib import Path
+import os
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -45,6 +46,7 @@ INSTALLED_APPS = [
     
     # 自定义应用
     'dataservice',
+    'aiservice',
 ]
 
 MIDDLEWARE = [
@@ -158,3 +160,25 @@ CORS_ALLOW_CREDENTIALS = True
 
 # JWT设置
 JWT_SECRET = 'your-secret-key-for-jwt-power-plant-monitoring-system'
+
+# 天气服务配置（优先从环境变量读取，避免把密钥写死在仓库）
+BAIDU_WEATHER_AK = os.getenv('BAIDU_WEATHER_AK', 'QbcyAz5VAPXxHYGOtHBwuE7y8pFjCPnK')
+BAIDU_WEATHER_HOST = os.getenv('BAIDU_WEATHER_HOST', 'https://api.map.baidu.com')
+BAIDU_WEATHER_URI = os.getenv('BAIDU_WEATHER_URI', '/weather/v1/')
+# 默认滨海新区（可按需覆盖）
+BAIDU_WEATHER_DISTRICT_ID = os.getenv('BAIDU_WEATHER_DISTRICT_ID', '120116')
+
+# 预测功能开关（默认关闭以免要求安装ML依赖）
+PREDICT_ENABLED = os.getenv('PREDICT_ENABLED', '0') == '1'
+
+# DeepSeek AI配置
+DEEPSEEKKEY = os.getenv('DEEPSEEKKEY', 'sk-da896803e7ea49c3ae4e799300756250')
+DEEPSEEK_MODEL = os.getenv('DEEPSEEK_MODEL', 'deepseek-chat')
+DEEPSEEK_API_URL = os.getenv('DEEPSEEK_API_URL', 'https://api.deepseek.com/chat/completions')
+DEEPSEEK_TIMEOUT = int(os.getenv('DEEPSEEK_TIMEOUT', '60'))  # API请求超时时间（秒），默认60秒
+
+AGENT_MAX_DOCS = 5000      # 强制 limit 上限（考虑10秒采集频率）
+AGENT_TIMEOUT_S = 20       # 查询超时（增加到20秒）
+AGENT_MAX_TIME_RANGE_HOURS = 72  # 最大查询时间范围（3天）
+AGENT_DEFAULT_SAMPLE_INTERVAL = 60  # 默认采样间隔（秒）
+AGENT_ALLOWED_COLLECTIONS = ['sensor_data']  # 允许的集合列表
